@@ -32,7 +32,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
             console.log("Tentando Groq (Llama)...");
             const chatCompletion = await groq.chat.completions.create({
                 messages: [{ role: "user", content: messageText || "Olá" }],
-                model: "llama3-8b-8192", // Modelo mais estável para contas grátis
+                model: "llama-3.1-8b-instant", // Modelo atualizado 2026
             });
             const response = chatCompletion.choices[0]?.message?.content;
             if (response) return "🚀 *[Groq]* " + response;
