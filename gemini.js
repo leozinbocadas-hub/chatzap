@@ -5,59 +5,63 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// Log para debug no EasyPanel (não mostra a chave toda por segurança)
+console.log("Config: Gemini:", !!process.env.GEMINI_API_KEY, "| Groq:", !!process.env.GROQ_API_KEY, "| OpenAI:", !!process.env.OPENAI_API_KEY);
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
-    // 1. TENTATIVA COM GEMINI (Suporta Multimodal: Texto, Imagem, Áudio)
+    // 1. TENTATIVA COM GEMINI (Multimodal)
     try {
         console.log("Tentando Gemini 2.0 Flash...");
-        const result = await processWithGemini(messageText, mediaBuffer, mimeType);
-        return result;
+        return await processWithGemini(messageText, mediaBuffer, mimeType);
     } catch (error) {
-        // Se for erro de cota ou erro fatal, passa para o próximo se for apenas texto
         console.log(`⚠️ Gemini falhou: ${error.status === 429 ? 'Cota esgotada' : error.message}`);
-
-        // Se a mensagem contiver mídia, o Groq/GPT Mini (via API simples) podem ter dificuldade
-        // Então tentaremos apenas o texto se possível.
         if (mediaBuffer && !messageText) {
-            return "⚠️ O Gemini (que processa imagens/áudio) está fora do ar ou sem cota. Tente novamente em 1 minuto.";
+            return "⚠️ O Gemini (mídia) está sem cota. Tente texto puro ou aguarde 1 minuto.";
         }
     }
 
-    // 2. TENTATIVA COM GROQ (Fallback Ultra Rápido para Texto)
-    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== "sua_chave_do_groq") {
+    // 2. TENTATIVA COM GROQ (Com Timeout para não travar o WhatsApp)
+    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.length > 10) {
         try {
-            console.log("Tentando Groq (Llama)...");
-            const chatCompletion = await groq.chat.completions.create({
-                messages: [{ role: "user", content: messageText || "Olá" }],
-                model: "llama-3.1-8b-instant", // Modelo atualizado 2026
-            });
-            const response = chatCompletion.choices[0]?.message?.content;
-            if (response) return "🚀 *[Groq]* " + response;
+            console.log("Tentando Groq (Llama 3.3)...");
+
+            // Promise race para dar timeout de 10 segundos
+            const response = await Promise.race([
+                groq.chat.completions.create({
+                    messages: [{ role: "user", content: messageText || "Olá" }],
+                    model: "llama-3.3-70b-versatile",
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout Groq")), 10000))
+            ]);
+
+            const content = response.choices[0]?.message?.content;
+            if (content) return "🚀 *[Groq]* " + content;
         } catch (error) {
             console.log("⚠️ Groq falhou:", error.message);
         }
-    } else {
-        console.log("⏭️ Groq ignorado (chave não configurada)");
     }
 
-    // 3. TENTATIVA COM GPT-4o MINI (Último recurso)
-    if (process.env.OPENAI_API_KEY) {
+    // 3. TENTATIVA COM GPT-4o MINI
+    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.length > 10) {
         try {
             console.log("Tentando GPT-4o Mini...");
             const response = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [{ role: "user", content: messageText || "Olá" }],
+                timeout: 10000 // Timeout nativo da OpenAI
             });
-            return "🤖 *[GPT Mini]* " + response.choices[0].message.content;
+            const content = response.choices[0]?.message?.content;
+            if (content) return "🤖 *[GPT Mini]* " + content;
         } catch (error) {
             console.log("⚠️ GPT Mini falhou:", error.message);
         }
     }
 
-    return "❌ Todas as APIs estão indisponíveis ou sem cota no momento. Tente novamente em instantes.";
+    return "❌ Todas as APIs estão indisponíveis. Aguarde um momento.";
 }
 
 async function processWithGemini(messageText, mediaBuffer, mimeType) {
