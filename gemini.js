@@ -5,9 +5,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Log para debug no EasyPanel (não mostra a chave toda por segurança)
-console.log("Config: Gemini:", !!process.env.GEMINI_API_KEY, "| Groq:", !!process.env.GROQ_API_KEY, "| OpenAI:", !!process.env.OPENAI_API_KEY);
-
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -15,70 +12,56 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
     // 1. TENTATIVA COM GEMINI (Multimodal)
     try {
-        console.log("Tentando Gemini 2.0 Flash...");
+        console.log("Tentando Gemini...");
         return await processWithGemini(messageText, mediaBuffer, mimeType);
     } catch (error) {
-        console.log(`⚠️ Gemini falhou: ${error.status === 429 ? 'Cota esgotada' : error.message}`);
-        if (mediaBuffer && !messageText) {
-            return "⚠️ O Gemini (mídia) está sem cota. Tente texto puro ou aguarde 1 minuto.";
-        }
+        console.log(`⚠️ Gemini fora: ${error.status === 429 ? 'Cota' : 'Erro'}`);
     }
 
-    // 2. TENTATIVA COM GROQ (Com Timeout para não travar o WhatsApp)
-    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.length > 10) {
+    // 2. TENTATIVA COM GROQ (Ultra rápido - 5s timeout)
+    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.startsWith("gsk_")) {
         try {
-            console.log("Tentando Groq (Llama 3.3)...");
-
-            // Promise race para dar timeout de 10 segundos
+            console.log("Tentando Groq (Mixtral)...");
             const response = await Promise.race([
                 groq.chat.completions.create({
                     messages: [{ role: "user", content: messageText || "Olá" }],
-                    model: "llama-3.3-70b-versatile",
+                    model: "mixtral-8x7b-32768",
                 }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout Groq")), 10000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
             ]);
 
             const content = response.choices[0]?.message?.content;
             if (content) return "🚀 *[Groq]* " + content;
         } catch (error) {
-            console.log("⚠️ Groq falhou:", error.message);
+            console.log("⚠️ Groq falhou ou Timeout de 5s.");
         }
     }
 
-    // 3. TENTATIVA COM GPT-4o MINI
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.length > 10) {
+    // 3. TENTATIVA COM GPT-4o MINI (5s timeout)
+    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.startsWith("sk-")) {
         try {
-            console.log("Tentando GPT-4o Mini...");
+            console.log("Tentando GPT Mini...");
             const response = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [{ role: "user", content: messageText || "Olá" }],
-                timeout: 10000 // Timeout nativo da OpenAI
+                timeout: 5000
             });
             const content = response.choices[0]?.message?.content;
             if (content) return "🤖 *[GPT Mini]* " + content;
         } catch (error) {
-            console.log("⚠️ GPT Mini falhou:", error.message);
+            console.log("⚠️ GPT Mini falhou.");
         }
     }
 
-    return "❌ Todas as APIs estão indisponíveis. Aguarde um momento.";
+    return "⚠️ Estou com instabilidade em todas as minhas conexões (Gemini, Groq e GPT). Por favor, tente novamente em um minuto.";
 }
 
 async function processWithGemini(messageText, mediaBuffer, mimeType) {
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    let promptParts = [messageText || "O que tem nesta imagem/áudio?"];
-
+    let promptParts = [messageText || "Descreva"];
     if (mediaBuffer && mimeType) {
-        const cleanMimeType = mimeType.split(';')[0];
-        promptParts.push({
-            inlineData: {
-                data: mediaBuffer.toString("base64"),
-                mimeType: cleanMimeType
-            }
-        });
+        promptParts.push({ inlineData: { data: mediaBuffer.toString("base64"), mimeType: mimeType.split(';')[0] } });
     }
-
     const result = await model.generateContent(promptParts);
-    const response = await result.response;
-    return response.text();
+    return result.response.text();
 }
