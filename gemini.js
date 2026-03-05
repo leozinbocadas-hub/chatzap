@@ -27,13 +27,13 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         const response = await result.response;
         return response.text();
     } catch (error) {
-        console.error("Erro no Gemini:", error);
-
-        // Trata erro de limite de cota (Rate Limit)
+        // Trata erro de limite de cota (Rate Limit) sem poluir o console
         if (error.status === 429) {
+            console.log("⚠️ Limite de cota do Gemini atingido (15 req/min). Aguardando reset...");
             return "⚠️ *Limite atingido:* Estou processando muitas mensagens no momento. Por favor, aguarde um minuto e tente novamente! (Limite de cota do Google Gemini)";
         }
 
+        console.error("Erro no Gemini:", error);
         return "❌ Desculpe, tive um problema ao processar sua mensagem agora. Tente de novo em instantes.";
     }
 }

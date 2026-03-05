@@ -71,6 +71,12 @@ async function connectToWhatsApp() {
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
+
+        // IGNORAR GRUPOS: Se o JID terminar com @g.us, o robô não faz nada
+        if (remoteJid.endsWith('@g.us')) {
+            return;
+        }
+
         const messageType = Object.keys(msg.message)[0];
 
         let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
