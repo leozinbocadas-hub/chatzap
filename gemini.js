@@ -27,17 +27,20 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
     }
 
     // 2. TENTATIVA COM GROQ (Fallback Ultra Rápido para Texto)
-    if (process.env.GROQ_API_KEY) {
+    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== "sua_chave_do_groq") {
         try {
-            console.log("Tentando Groq (Llama 3)...");
+            console.log("Tentando Groq (Llama)...");
             const chatCompletion = await groq.chat.completions.create({
                 messages: [{ role: "user", content: messageText || "Olá" }],
-                model: "llama-3.3-70b-versatile",
+                model: "llama3-8b-8192", // Modelo mais estável para contas grátis
             });
-            return "🚀 *[Groq]* " + chatCompletion.choices[0].message.content;
+            const response = chatCompletion.choices[0]?.message?.content;
+            if (response) return "🚀 *[Groq]* " + response;
         } catch (error) {
             console.log("⚠️ Groq falhou:", error.message);
         }
+    } else {
+        console.log("⏭️ Groq ignorado (chave não configurada)");
     }
 
     // 3. TENTATIVA COM GPT-4o MINI (Último recurso)
