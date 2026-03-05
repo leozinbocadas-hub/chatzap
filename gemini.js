@@ -5,6 +5,8 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const SYSTEM_PROMPT = "Você é um assistente pessoal prestativo. Responda sempre em Português do Brasil (PT-BR). Seja conciso e amigável.";
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -18,50 +20,66 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         console.log(`⚠️ Gemini fora: ${error.status === 429 ? 'Cota' : 'Erro'}`);
     }
 
-    // 2. TENTATIVA COM GROQ (Ultra rápido - 5s timeout)
-    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.startsWith("gsk_")) {
+    // 2. TENTATIVA COM GROQ (Llama 3.1 8b - Mais rápido)
+    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.includes("gsk_")) {
         try {
-            console.log("Tentando Groq (Mixtral)...");
-            const response = await Promise.race([
-                groq.chat.completions.create({
-                    messages: [{ role: "user", content: messageText || "Olá" }],
-                    model: "mixtral-8x7b-32768",
-                }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
-            ]);
+            console.log("Tentando Groq...");
+            const response = await groq.chat.completions.create({
+                messages: [
+                    { role: "system", content: SYSTEM_PROMPT },
+                    { role: "user", content: messageText || "Olá" }
+                ],
+                model: "llama-3.1-8b-instant",
+            }).catch(() => null);
 
-            const content = response.choices[0]?.message?.content;
-            if (content) return "🚀 *[Groq]* " + content;
+            if (response && response.choices[0]?.message?.content) {
+                return response.choices[0].message.content;
+            }
         } catch (error) {
-            console.log("⚠️ Groq falhou ou Timeout de 5s.");
+            console.log("⚠️ Groq falhou.");
         }
     }
 
-    // 3. TENTATIVA COM GPT-4o MINI (5s timeout)
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.startsWith("sk-")) {
+    // 3. TENTATIVA COM GPT-4o MINI
+    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.includes("sk-")) {
         try {
             console.log("Tentando GPT Mini...");
             const response = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
-                messages: [{ role: "user", content: messageText || "Olá" }],
-                timeout: 5000
-            });
-            const content = response.choices[0]?.message?.content;
-            if (content) return "🤖 *[GPT Mini]* " + content;
+                messages: [
+                    { role: "system", content: SYSTEM_PROMPT },
+                    { role: "user", content: messageText || "Olá" }
+                ],
+            }).catch(() => null);
+
+            if (response && response.choices[0]?.message?.content) {
+                return response.choices[0].message.content;
+            }
         } catch (error) {
             console.log("⚠️ GPT Mini falhou.");
         }
     }
 
-    return "⚠️ Estou com instabilidade em todas as minhas conexões (Gemini, Groq e GPT). Por favor, tente novamente em um minuto.";
+    return "⚠️ Desculpe, estou recebendo muitas mensagens agora e minhas APIs grátis atingiram o limite. Tente novamente em 1 minuto.";
 }
 
 async function processWithGemini(messageText, mediaBuffer, mimeType) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    let promptParts = [messageText || "Descreva"];
+    const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        systemInstruction: SYSTEM_PROMPT
+    });
+
+    let promptParts = [messageText || "O que tem nesta imagem/áudio?"];
+
     if (mediaBuffer && mimeType) {
-        promptParts.push({ inlineData: { data: mediaBuffer.toString("base64"), mimeType: mimeType.split(';')[0] } });
+        promptParts.push({
+            inlineData: {
+                data: mediaBuffer.toString("base64"),
+                mimeType: mimeType.split(';')[0]
+            }
+        });
     }
+
     const result = await model.generateContent(promptParts);
     return result.response.text();
 }
