@@ -2,7 +2,8 @@ import {
     makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    downloadMediaMessage
+    downloadMediaMessage,
+    fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
@@ -16,14 +17,31 @@ import ffmpeg from 'ffmpeg-static';
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
+    // Buscar a versão mais recente do WhatsApp para evitar erro 405
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Usando WhatsApp v${version.join('.')}, isLatest: ${isLatest}`);
+
     const socket = makeWASocket({
+        version,
         auth: state,
-        // Configuração mais padrão que costuma evitar o erro 405
+        printQRInTerminal: false,
+        // Navegador Linux costuma ser mais estável para containers
         browser: ['Ubuntu', 'Chrome', '20.0.04'],
         logger: pino({ level: 'silent' }),
-        // Forçar reconexão mais rápida em alguns casos
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000,
+        emitOwnEvents: true,
+        generateHighQualityLinkPreview: true,
+        syncFullHistory: false,
+        markOnlineOnConnect: true,
+        // Cabeçalhos que ajudam a simular web.whatsapp.com corretamente
+        options: {
+            headers: {
+                'Origin': 'https://web.whatsapp.com',
+                'Host': 'web.whatsapp.com'
+            }
+        }
     });
 
     socket.ev.on('creds.update', saveCreds);
@@ -40,7 +58,8 @@ async function connectToWhatsApp() {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexão fechada devido a ', lastDisconnect.error, ', reconectando: ', shouldReconnect);
             if (shouldReconnect) {
-                connectToWhatsApp();
+                // Delay para evitar loop infinito rápido
+                setTimeout(() => connectToWhatsApp(), 5000);
             }
         } else if (connection === 'open') {
             console.log('Conexão aberta com sucesso!');
@@ -59,31 +78,23 @@ async function connectToWhatsApp() {
         let mimeType = null;
 
         try {
-            // Se for imagem
             if (messageType === 'imageMessage') {
                 mediaBuffer = await downloadMediaMessage(msg, 'buffer');
                 mimeType = msg.message.imageMessage.mimetype;
                 text = msg.message.imageMessage.caption || "Descreva esta imagem";
             }
-            // Se for áudio
             else if (messageType === 'audioMessage') {
                 mediaBuffer = await downloadMediaMessage(msg, 'buffer');
                 mimeType = msg.message.audioMessage.mimetype;
                 text = "Transcreva e responda a este áudio";
-
-                // Gemini aceita áudio nativamente se for em formato suportado (como MP3/OGG/AAC)
-                // O WhatsApp costuma enviar em OGG/OPUS
             }
 
-            // Mostrar que está "digitando..."
             await socket.presenceSubscribe(remoteJid);
             await socket.sendPresenceUpdate('composing', remoteJid);
 
             const response = await processMessage(text, mediaBuffer, mimeType);
 
             await socket.sendMessage(remoteJid, { text: response }, { quoted: msg });
-
-            // Parar "digitando"
             await socket.sendPresenceUpdate('paused', remoteJid);
 
         } catch (err) {
