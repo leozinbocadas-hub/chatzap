@@ -1,18 +1,67 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import fs from "fs";
+import Groq from "groq-sdk";
+import OpenAI from "openai";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // 1. TENTATIVA COM GEMINI (Suporta Multimodal: Texto, Imagem, Áudio)
+    try {
+        console.log("Tentando Gemini 2.0 Flash...");
+        const result = await processWithGemini(messageText, mediaBuffer, mimeType);
+        return result;
+    } catch (error) {
+        // Se for erro de cota ou erro fatal, passa para o próximo se for apenas texto
+        console.log(`⚠️ Gemini falhou: ${error.status === 429 ? 'Cota esgotada' : error.message}`);
 
+        // Se a mensagem contiver mídia, o Groq/GPT Mini (via API simples) podem ter dificuldade
+        // Então tentaremos apenas o texto se possível.
+        if (mediaBuffer && !messageText) {
+            return "⚠️ O Gemini (que processa imagens/áudio) está fora do ar ou sem cota. Tente novamente em 1 minuto.";
+        }
+    }
+
+    // 2. TENTATIVA COM GROQ (Fallback Ultra Rápido para Texto)
+    if (process.env.GROQ_API_KEY) {
+        try {
+            console.log("Tentando Groq (Llama 3)...");
+            const chatCompletion = await groq.chat.completions.create({
+                messages: [{ role: "user", content: messageText || "Olá" }],
+                model: "llama-3.3-70b-versatile",
+            });
+            return "🚀 *[Groq]* " + chatCompletion.choices[0].message.content;
+        } catch (error) {
+            console.log("⚠️ Groq falhou:", error.message);
+        }
+    }
+
+    // 3. TENTATIVA COM GPT-4o MINI (Último recurso)
+    if (process.env.OPENAI_API_KEY) {
+        try {
+            console.log("Tentando GPT-4o Mini...");
+            const response = await openai.chat.completions.create({
+                model: "gpt-4o-mini",
+                messages: [{ role: "user", content: messageText || "Olá" }],
+            });
+            return "🤖 *[GPT Mini]* " + response.choices[0].message.content;
+        } catch (error) {
+            console.log("⚠️ GPT Mini falhou:", error.message);
+        }
+    }
+
+    return "❌ Todas as APIs estão indisponíveis ou sem cota no momento. Tente novamente em instantes.";
+}
+
+async function processWithGemini(messageText, mediaBuffer, mimeType) {
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     let promptParts = [messageText || "O que tem nesta imagem/áudio?"];
 
     if (mediaBuffer && mimeType) {
-        // Limpa mimeType (ex: audio/ogg; codecs=opus -> audio/ogg)
         const cleanMimeType = mimeType.split(';')[0];
         promptParts.push({
             inlineData: {
@@ -22,18 +71,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         });
     }
 
-    try {
-        const result = await model.generateContent(promptParts);
-        const response = await result.response;
-        return response.text();
-    } catch (error) {
-        // Trata erro de limite de cota (Rate Limit) sem poluir o console
-        if (error.status === 429) {
-            console.log("⚠️ Limite de cota do Gemini atingido (15 req/min). Aguardando reset...");
-            return "⚠️ *Limite atingido:* Estou processando muitas mensagens no momento. Por favor, aguarde um minuto e tente novamente! (Limite de cota do Google Gemini)";
-        }
-
-        console.error("Erro no Gemini:", error);
-        return "❌ Desculpe, tive um problema ao processar sua mensagem agora. Tente de novo em instantes.";
-    }
+    const result = await model.generateContent(promptParts);
+    const response = await result.response;
+    return response.text();
 }
