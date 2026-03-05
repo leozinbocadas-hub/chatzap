@@ -18,9 +18,12 @@ async function connectToWhatsApp() {
 
     const socket = makeWASocket({
         auth: state,
-        // Adicionar o browser ajuda a evitar o erro 405 Connection Failure
-        browser: ['ChatZap', 'Chrome', '1.0.0'],
-        logger: pino({ level: 'silent' })
+        // Configuração mais padrão que costuma evitar o erro 405
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        logger: pino({ level: 'silent' }),
+        // Forçar reconexão mais rápida em alguns casos
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
     });
 
     socket.ev.on('creds.update', saveCreds);
