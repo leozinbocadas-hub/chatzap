@@ -18,7 +18,8 @@ async function connectToWhatsApp() {
 
     const socket = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
+        // Adicionar o browser ajuda a evitar o erro 405 Connection Failure
+        browser: ['ChatZap', 'Chrome', '1.0.0'],
         logger: pino({ level: 'silent' })
     });
 
@@ -29,6 +30,7 @@ async function connectToWhatsApp() {
 
         if (qr) {
             console.log('----\nEscaneie o QR Code abaixo para conectar:\n----');
+            qrcode.generate(qr, { small: true });
         }
 
         if (connection === 'close') {
