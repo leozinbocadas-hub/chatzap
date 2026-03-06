@@ -96,6 +96,7 @@ async function connectToWhatsApp() {
                 console.log(`🤖 Processando conjunto de mensagens para ${remoteJid}...`);
                 const response = await processMessage(finalData.text.trim(), finalData.media, finalData.mime);
 
+                console.log(`📤 Enviando resposta final para ${remoteJid}...`);
                 await socket.sendMessage(remoteJid, { text: response });
             } catch (err) {
                 console.log('Erro na fila:', err.message);

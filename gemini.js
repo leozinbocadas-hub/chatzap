@@ -21,18 +21,26 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
 
     // 1. TENTATIVA COM GEMINI (UNICO PARA MIDIA)
     try {
-        if (isMedia) console.log("🧪 Enviando Mídia para o Gemini...");
-        else console.log("📝 Enviando Texto para o Gemini...");
+        if (isMedia) {
+            console.log(`🧪 [MIDIA] Enviando para Gemini. Prompt solicitado: "${messageText}"`);
+            console.log(`📂 [ARQUIVO] Buffer size: ${mediaBuffer.length} bytes | Mime: ${mimeType}`);
+        } else {
+            console.log(`📝 [TEXTO] Enviando para Gemini: "${messageText}"`);
+        }
 
         const responseText = await processWithGemini(messageText, mediaBuffer, mimeType);
-        console.log("✅ Resposta do Gemini obtida.");
+
+        console.log(`✅ [SUCESSO] Gemini respondeu (tamanho: ${responseText.length} caracteres)`);
+        if (isMedia) console.log(`🔍 [CONTEUDO] Início da resposta: ${responseText.substring(0, 100)}...`);
+
         return cleanWhatsAppText(responseText);
     } catch (error) {
-        console.log(`❌ Gemini falhou: ${error.message}`);
+        console.log(`❌ [ERRO GEMINI] Detalhes: ${error.message}`);
         if (isMedia) {
             return "⚠️ Meu sistema de áudio/imagem está lento. Tente texto ou aguarde 1 minuto.";
         }
     }
+
 
     // FALLBACK PARA TEXTO (GROQ)
     if (process.env.GROQ_API_KEY) {
