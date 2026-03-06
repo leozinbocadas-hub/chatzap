@@ -99,7 +99,7 @@ async function connectToWhatsApp() {
                 await socket.sendPresenceUpdate('composing', remoteJid);
 
                 console.log(`🤖 Processando mensagens para ${remoteJid}...`);
-                const response = await processMessage(finalData.text.trim(), finalData.media, finalData.mime);
+                const response = await processMessage(finalData.text.trim(), finalData.media, finalData.mime, remoteJid);
 
                 // DIVIDIR RESPOSTA EM PARTES SE HOUVER [BREAK]
                 const parts = response.split('[BREAK]').map(p => p.trim()).filter(p => p.length > 0);
