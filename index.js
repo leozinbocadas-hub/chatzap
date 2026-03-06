@@ -91,9 +91,14 @@ async function connectToWhatsApp() {
                 const finalData = userQueues.get(remoteJid);
                 userQueues.delete(remoteJid);
 
+                // IGNORAR SE NÃO HOUVER TEXTO NEM MÍDIA
+                if (!finalData.text.trim() && !finalData.media) {
+                    return;
+                }
+
                 await socket.sendPresenceUpdate('composing', remoteJid);
 
-                console.log(`🤖 Processando conjunto de mensagens para ${remoteJid}...`);
+                console.log(`🤖 Processando mensagens para ${remoteJid}...`);
                 const response = await processMessage(finalData.text.trim(), finalData.media, finalData.mime);
 
                 console.log(`📤 Enviando resposta final para ${remoteJid}...`);
@@ -101,7 +106,7 @@ async function connectToWhatsApp() {
             } catch (err) {
                 console.log('Erro na fila:', err.message);
             }
-        }, 7000); // Espera 7 segundos de silêncio antes de processar tudo
+        }, 7000);
     });
 }
 
