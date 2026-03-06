@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq, { toFile as groqToFile } from "groq-sdk";
-import OpenAI, { toFile as openaiToFile } from "openai";
+import OpenAI from "openai"; // Usado para consumir a API do DeepSeek
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
@@ -73,7 +73,6 @@ function addToHistory(userId, userMsg, botMsg) {
     let history = loadHistory(userId);
     history.push({ role: "user", content: userMsg });
     history.push({ role: "assistant", content: botMsg });
-    // Mantém apenas os últimos MAX_HISTORY pares (MAX_HISTORY * 2 mensagens)
     if (history.length > MAX_HISTORY * 2) history = history.slice(-MAX_HISTORY * 2);
     saveHistory(userId, history);
 }
@@ -83,15 +82,13 @@ const getKeys = (envVar) => (envVar || "").split(",").map(k => k.trim()).filter(
 
 const geminiKeys = getKeys(process.env.GEMINI_API_KEY);
 const groqKeys = getKeys(process.env.GROQ_API_KEY);
-const openaiKeys = getKeys(process.env.OPENAI_API_KEY);
+const deepseekKeys = getKeys(process.env.DEEPSEEK_API_KEY); // Nova chave do DeepSeek
 
 function cleanWhatsAppText(text) {
     if (!text) return text;
     return text.replace(/\*\*(.*?)\*\*/g, '*$1*');
 }
 
-
-// Monta o array de mensagens com histórico para APIs compatíveis (Groq/OpenAI)
 function buildMessages(userId, newUserMessage) {
     const history = loadHistory(userId);
     return [
@@ -106,100 +103,126 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
     const cleanMime = mimeType?.split(';')[0];
     let responseText = "";
 
-    // 1. RODÍZIO GEMINI (Principal - suporta histórico via startChat)
+    // ==========================================
+    // SE FOR MÍDIA (ÁUDIO OU IMAGEM)
+    // ==========================================
+    if (isMedia) {
+        // 1. PRIORIDADE MÍDIA: GROQ
+        for (let i = 0; i < groqKeys.length; i++) {
+            try {
+                const groq = new Groq({ apiKey: groqKeys[i] });
+
+                if (cleanMime?.startsWith('audio/')) {
+                    console.log(`🔄 [GROQ] Áudio -> Whisper (Chave ${i + 1})...`);
+                    const transcription = await groq.audio.transcriptions.create({
+                        file: await groqToFile(mediaBuffer, `audio.ogg`),
+                        model: "whisper-large-v3",
+                    });
+                    const msgs = buildMessages(userId, `O usuário enviou um áudio que diz: "${transcription.text}". Responda adequadamente.`);
+                    const chatRes = await groq.chat.completions.create({ messages: msgs, model: "llama-3.3-70b-versatile" });
+                    const clean = cleanWhatsAppText(chatRes.choices[0]?.message?.content);
+                    addToHistory(userId, `[áudio: ${transcription.text}]`, clean);
+                    return clean;
+                }
+
+                if (cleanMime?.startsWith('image/')) {
+                    console.log(`📸 [GROQ] Imagem -> Llama 4 Scout (Chave ${i + 1})...`);
+                    try {
+                        const visionRes = await groq.chat.completions.create({
+                            model: "meta-llama/llama-4-scout-17b-16e-instruct",
+                            messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva esta imagem" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
+                        });
+                        const clean = cleanWhatsAppText(visionRes.choices[0]?.message?.content);
+                        addToHistory(userId, `[imagem com legenda: ${messageText || "sem legenda"}]`, clean);
+                        return clean;
+                    } catch (vErr) {
+                        console.log(`⚠️ Llama 4 falhou, tentando Pixtral...`);
+                        const pixRes = await groq.chat.completions.create({
+                            model: "pixtral-12b-2409",
+                            messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
+                        });
+                        const clean = cleanWhatsAppText(pixRes.choices[0]?.message?.content);
+                        addToHistory(userId, `[imagem]`, clean);
+                        return clean;
+                    }
+                }
+            } catch (err) {
+                console.log(`❌ Groq Mídia (Chave ${i + 1}) erro: ${err.message}`);
+            }
+        }
+
+        // 2. FALLBACK MÍDIA: GEMINI
+        for (let i = 0; i < geminiKeys.length; i++) {
+            try {
+                const genAI = new GoogleGenerativeAI(geminiKeys[i]);
+                console.log(`🔄 [GEMINI] Mídia Fallback (Chave ${i + 1})...`);
+                responseText = await processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId);
+                const clean = cleanWhatsAppText(responseText);
+                addToHistory(userId, messageText || "[mídia]", clean);
+                return clean;
+            } catch (error) {
+                console.log(`❌ Gemini Mídia (Chave ${i + 1}) erro: ${error.status || error.message}`);
+            }
+        }
+
+        return "😔 Tive um probleminha para ler essa mídia agora. Pode me mandar por texto?";
+    }
+
+    // ==========================================
+    // SE FOR TEXTO
+    // ==========================================
+
+    // 1. PRIORIDADE TEXTO: GEMINI
     for (let i = 0; i < geminiKeys.length; i++) {
         try {
             const genAI = new GoogleGenerativeAI(geminiKeys[i]);
-            responseText = await processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId);
-            const clean = cleanWhatsAppText();
-            addToHistory(userId, messageText || "[mídia]", clean);
+            console.log(`🔄 [GEMINI] Texto (Chave ${i + 1})...`);
+            responseText = await processWithGemini(genAI, messageText, null, null, userId);
+            const clean = cleanWhatsAppText(responseText);
+            addToHistory(userId, messageText, clean);
             return clean;
         } catch (error) {
             console.log(`❌ Gemini (Chave ${i + 1}) erro: ${error.status || error.message}`);
         }
     }
 
-    // 2. RODÍZIO GROQ (Fallback com histórico)
-    for (let i = 0; i < groqKeys.length; i++) {
+    // 2. FALLBACK TEXTO: DEEPSEEK
+    for (let i = 0; i < deepseekKeys.length; i++) {
         try {
-            const groq = new Groq({ apiKey: groqKeys[i] });
+            console.log(`🔄 [DEEPSEEK] Texto (Chave ${i + 1})...`);
+            // DeepSeek é 100% compatível com a biblioteca da OpenAI
+            const deepseek = new OpenAI({
+                apiKey: deepseekKeys[i],
+                baseURL: 'https://api.deepseek.com'
+            });
 
-            if (isMedia && cleanMime?.startsWith('audio/')) {
-                console.log(`🔄 [GROQ] Áudio -> Whisper (Chave ${i + 1})...`);
-                const transcription = await groq.audio.transcriptions.create({
-                    file: await groqToFile(mediaBuffer, `audio.ogg`),
-                    model: "whisper-large-v3",
-                });
-                const msgs = buildMessages(userId, `O usuário enviou um áudio que diz: "${transcription.text}". Responda adequadamente.`);
-                const chatRes = await groq.chat.completions.create({ messages: msgs, model: "llama-3.3-70b-versatile" });
-                const clean = cleanWhatsAppText();
-                addToHistory(userId, `[áudio: ${transcription.text}]`, clean);
-                return clean;
-            }
+            const msgs = buildMessages(userId, messageText);
+            const res = await deepseek.chat.completions.create({
+                model: "deepseek-chat",
+                messages: msgs
+            });
 
-            if (isMedia && cleanMime?.startsWith('image/')) {
-                console.log(`📸 [GROQ] Imagem -> Llama 4 Scout (Chave ${i + 1})...`);
-                try {
-                    const visionRes = await groq.chat.completions.create({
-                        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-                        messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva esta imagem" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
-                    });
-                    const clean = cleanWhatsAppText();
-                    addToHistory(userId, `[imagem com legenda: ${messageText || "sem legenda"}]`, clean);
-                    return clean;
-                } catch (vErr) {
-                    console.log(`⚠️ Llama 4 falhou, tentando Pixtral...`);
-                    const pixRes = await groq.chat.completions.create({
-                        model: "pixtral-12b-2409",
-                        messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
-                    });
-                    const clean = cleanWhatsAppText();
-                    addToHistory(userId, `[imagem]`, clean);
-                    return clean;
-                }
-            }
-
-            if (!isMedia) {
-                console.log(`🔄 [GROQ] Texto -> Llama 3.3 (Chave ${i + 1})...`);
-                const msgs = buildMessages(userId, messageText);
-                const textRes = await groq.chat.completions.create({ messages: msgs, model: "llama-3.3-70b-versatile" });
-                const clean = cleanWhatsAppText();
+            if (res.choices && res.choices[0] && res.choices[0].message) {
+                const clean = cleanWhatsAppText(res.choices[0].message.content);
+                console.log(`✅ DeepSeek respondeu com sucesso!`);
                 addToHistory(userId, messageText, clean);
                 return clean;
             }
-        } catch (err) {
-            console.log(`❌ Groq (Chave ${i + 1}) erro: ${err.message}`);
-        }
-    }
-
-    // 3. RODÍZIO OPENAI (Último recurso com histórico)
-    for (let i = 0; i < openaiKeys.length; i++) {
-        try {
-            console.log(`🔄 [OPENAI] Tentando Chave ${i + 1}...`);
-            const openai = new OpenAI({ apiKey: openaiKeys[i] });
-            const res = await processWithOpenAI(openai, messageText, mediaBuffer, mimeType, userId);
-            if (res) {
-                const clean = cleanWhatsAppText();
-                addToHistory(userId, messageText || "[mídia]", clean);
-                return clean;
-            }
         } catch (e) {
-            console.log(`❌ OpenAI (Chave ${i + 1}) erro: ${e.message}`);
+            console.log(`❌ DeepSeek (Chave ${i + 1}) erro: ${e.message}`);
         }
     }
 
-    return "😔 Estou um pouco sobrecarregado agora. Pode me mandar uma mensagem de texto? Em alguns instantes estarei de volta!";
+    return "😔 Estou um pouco sobrecarregado agora. Tente mandar a mensagem de novo em alguns instantes!";
 }
 
 async function processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId) {
-    // Tenta gemini-1.5-flash primeiro (1500 req/dia grátis), depois o 8b como fallback
     const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b"];
 
     for (const modelName of modelsToTry) {
         try {
             const model = genAI.getGenerativeModel({ model: modelName, systemInstruction: SYSTEM_PROMPT });
 
-            // Monta o histórico no formato do Gemini
             const rawHistory = loadHistory(userId);
             const geminiHistory = rawHistory.map(m => ({
                 role: m.role === "assistant" ? "model" : "user",
@@ -221,24 +244,4 @@ async function processWithGemini(genAI, messageText, mediaBuffer, mimeType, user
         }
     }
     throw new Error("Todos os modelos Gemini falharam");
-}
-
-async function processWithOpenAI(openai, messageText, mediaBuffer, mimeType, userId) {
-    const cleanMime = mimeType?.split(';')[0];
-    if (cleanMime?.startsWith('image/')) {
-        const res = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
-        });
-        return res.choices[0]?.message?.content;
-    }
-    if (cleanMime?.startsWith('audio/')) {
-        const trans = await openai.audio.transcriptions.create({ file: await openaiToFile(mediaBuffer, `audio.ogg`), model: "whisper-1" });
-        const msgs = buildMessages(userId, `Responda: ${trans.text}`);
-        const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages: msgs });
-        return res.choices[0]?.message?.content;
-    }
-    const msgs = buildMessages(userId, messageText);
-    const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages: msgs });
-    return res.choices[0]?.message?.content;
 }
