@@ -14,16 +14,15 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
     // 1. TENTATIVA COM GEMINI (Multimodal)
     try {
-        console.log("Tentando Gemini...");
         return await processWithGemini(messageText, mediaBuffer, mimeType);
     } catch (error) {
-        console.log(`⚠️ Gemini fora: ${error.status === 429 ? 'Cota' : 'Erro'}`);
+        // Ignora log
     }
+
 
     // 2. TENTATIVA COM GROQ (Llama 3.1 8b - Mais rápido)
     if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.includes("gsk_")) {
         try {
-            console.log("Tentando Groq...");
             const response = await groq.chat.completions.create({
                 messages: [
                     { role: "system", content: SYSTEM_PROMPT },
@@ -36,14 +35,14 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                 return response.choices[0].message.content;
             }
         } catch (error) {
-            console.log("⚠️ Groq falhou.");
+            // Ignora log
         }
+
     }
 
     // 3. TENTATIVA COM GPT-4o MINI
     if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.includes("sk-")) {
         try {
-            console.log("Tentando GPT Mini...");
             const response = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -56,8 +55,9 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                 return response.choices[0].message.content;
             }
         } catch (error) {
-            console.log("⚠️ GPT Mini falhou.");
+            // Ignora log
         }
+
     }
 
     return "⚠️ Desculpe, estou recebendo muitas mensagens agora e minhas APIs grátis atingiram o limite. Tente novamente em 1 minuto.";

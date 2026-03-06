@@ -14,6 +14,7 @@ async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
 
+
     const socket = makeWASocket({
         version,
         auth: state,
@@ -41,10 +42,10 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexão fechada. Reconectando:', shouldReconnect);
             if (shouldReconnect) {
                 setTimeout(() => connectToWhatsApp(), 5000);
             }
+
         } else if (connection === 'open') {
             console.log('✅ BOT CONECTADO COM SUCESSO!');
         }
@@ -86,8 +87,9 @@ async function connectToWhatsApp() {
             // Envia a resposta Final
             await socket.sendMessage(remoteJid, { text: response });
         } catch (err) {
-            console.log('Erro ao processar mensagem:', err.message);
+            // Silencioso
         }
+
     });
 }
 
