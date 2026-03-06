@@ -18,6 +18,29 @@ function cleanWhatsAppText(text) {
     return text.replace(/\*\*(.*?)\*\*/g, '*$1*');
 }
 
+function sanitizeResponse(text) {
+    if (!text) return text;
+    // Lista de termos técnicos que nunca devem chegar ao cliente
+    const blocked = [
+        /gemini/gi, /groq/gi, /openai/gi, /open ai/gi, /chatgpt/gi,
+        /api\s?(key|chave)?/gi, /cota/gi, /quota/gi, /rate.?limit/gi,
+        /token/gi, /modelo\s?(de)?\s?ia/gi, /instabilidade/gi,
+        /gpt[-\s]?4?/gi, /llama/gi, /whisper/gi, /pixtral/gi,
+    ];
+    let cleaned = text;
+    blocked.forEach(pattern => {
+        cleaned = cleaned.replace(pattern, match => {
+            // Substituição só se a palavra estiver em contexto de erro
+            return '_IA_';
+        });
+    });
+    // Se ficou muito "quebrado", retorna mensagem padrão amigável
+    if ((cleaned.match(/_IA_/g) || []).length > 2) {
+        return "😊 Pronto! Posso te ajudar com mais alguma coisa?";
+    }
+    return cleaned.replace(/_IA_/g, '');
+}
+
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
     const isMedia = mediaBuffer !== null;
     const cleanMime = mimeType?.split(';')[0];
@@ -27,7 +50,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         try {
             const genAI = new GoogleGenerativeAI(geminiKeys[i]);
             const responseText = await processWithGemini(genAI, messageText, mediaBuffer, mimeType);
-            return cleanWhatsAppText(responseText);
+            return sanitizeResponse(cleanWhatsAppText(responseText));
         } catch (error) {
             console.log(`❌ Gemini (Chave ${i + 1}) erro: ${error.status || error.message}`);
         }
@@ -49,7 +72,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                     messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: `Responda: ${transcription.text}` }],
                     model: "llama-3.3-70b-versatile", // Modelo Versatile 2026
                 });
-                return cleanWhatsAppText(chatRes.choices[0]?.message?.content);
+                return sanitizeResponse(cleanWhatsAppText(chatRes.choices[0]?.message?.content));
             }
 
             // Fallback IMAGEM (Llama 4 Scout / Pixtral)
@@ -66,7 +89,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                             ]
                         }]
                     });
-                    return cleanWhatsAppText(visionRes.choices[0]?.message?.content);
+                    return sanitizeResponse(cleanWhatsAppText(visionRes.choices[0]?.message?.content));
                 } catch (vErr) {
                     console.log(`⚠️ Llama 4 falhou, tentando Pixtral...`);
                     const pixRes = await groq.chat.completions.create({
@@ -79,7 +102,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                             ]
                         }]
                     });
-                    return cleanWhatsAppText(pixRes.choices[0]?.message?.content);
+                    return sanitizeResponse(cleanWhatsAppText(pixRes.choices[0]?.message?.content));
                 }
             }
 
@@ -90,7 +113,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                     messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: messageText }],
                     model: "llama-3.3-70b-versatile",
                 });
-                return cleanWhatsAppText(textRes.choices[0]?.message?.content);
+                return sanitizeResponse(cleanWhatsAppText(textRes.choices[0]?.message?.content));
             }
         } catch (err) {
             console.log(`❌ Groq (Chave ${i + 1}) erro: ${err.message}`);
@@ -109,7 +132,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         }
     }
 
-    return "⚠️ Infelizmente não consegui processar agora. Tente mandar um texto ou aguarde 1 minuto.";
+    return "😔 Estou um pouco sobrecarregado agora. Pode me mandar uma mensagem de texto? Em alguns instantes estarei de volta ao normal!";
 }
 
 async function processWithGemini(genAI, messageText, mediaBuffer, mimeType) {
