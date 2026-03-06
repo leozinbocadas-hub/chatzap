@@ -1,6 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq, { toFile as groqToFile } from "groq-sdk";
-import OpenAI from "openai"; // Usado para consumir a API do DeepSeek
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
@@ -82,7 +81,6 @@ const getKeys = (envVar) => (envVar || "").split(",").map(k => k.trim()).filter(
 
 const geminiKeys = getKeys(process.env.GEMINI_API_KEY);
 const groqKeys = getKeys(process.env.GROQ_API_KEY);
-const deepseekKeys = getKeys(process.env.DEEPSEEK_API_KEY); // Nova chave do DeepSeek
 
 function cleanWhatsAppText(text) {
     if (!text) return text;
@@ -186,30 +184,18 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         }
     }
 
-    // 2. FALLBACK TEXTO: DEEPSEEK
-    for (let i = 0; i < deepseekKeys.length; i++) {
+    // 2. FALLBACK TEXTO: GROQ (Salvação final grátis)
+    for (let i = 0; i < groqKeys.length; i++) {
         try {
-            console.log(`🔄 [DEEPSEEK] Texto (Chave ${i + 1})...`);
-            // DeepSeek é 100% compatível com a biblioteca da OpenAI
-            const deepseek = new OpenAI({
-                apiKey: deepseekKeys[i],
-                baseURL: 'https://api.deepseek.com'
-            });
-
+            console.log(`🔄 [GROQ] Texto Fallback (Chave ${i + 1})...`);
+            const groq = new Groq({ apiKey: groqKeys[i] });
             const msgs = buildMessages(userId, messageText);
-            const res = await deepseek.chat.completions.create({
-                model: "deepseek-chat",
-                messages: msgs
-            });
-
-            if (res.choices && res.choices[0] && res.choices[0].message) {
-                const clean = cleanWhatsAppText(res.choices[0].message.content);
-                console.log(`✅ DeepSeek respondeu com sucesso!`);
-                addToHistory(userId, messageText, clean);
-                return clean;
-            }
-        } catch (e) {
-            console.log(`❌ DeepSeek (Chave ${i + 1}) erro: ${e.message}`);
+            const textRes = await groq.chat.completions.create({ messages: msgs, model: "llama-3.3-70b-versatile" });
+            const clean = cleanWhatsAppText(textRes.choices[0]?.message?.content);
+            addToHistory(userId, messageText, clean);
+            return clean;
+        } catch (err) {
+            console.log(`❌ Groq Texto (Chave ${i + 1}) erro: ${err.message}`);
         }
     }
 
@@ -217,7 +203,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
 }
 
 async function processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId) {
-    const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b"];
+    const modelsToTry = ["gemini-2.0-flash", "gemini-1.5-pro"];
 
     for (const modelName of modelsToTry) {
         try {
