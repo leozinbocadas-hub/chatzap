@@ -12,15 +12,19 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
-    // 1. TENTATIVA COM GEMINI (Multimodal)
+    const isMedia = mediaBuffer !== null;
+
+    // 1. TENTATIVA COM GEMINI (O ÚNICO QUE PROCESSA ÁUDIO/IMAGEM)
     try {
         return await processWithGemini(messageText, mediaBuffer, mimeType);
     } catch (error) {
-        // Ignora log
+        // Se for mídia (áudio/imagem), não adianta passar para Groq/GPT Mini pois eles não "ouvem" nem "veem" o arquivo.
+        if (isMedia) {
+            return "⚠️ Meu sistema de processamento de áudio/imagem está congestionado agora. Por favor, tente enviar um texto ou aguarde 1 minuto.";
+        }
     }
 
-
-    // 2. TENTATIVA COM GROQ (Llama 3.1 8b - Mais rápido)
+    // 2. TENTATIVA COM GROQ (Fallback apenas para TEXTO)
     if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.includes("gsk_")) {
         try {
             const response = await groq.chat.completions.create({
@@ -34,13 +38,10 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
             if (response && response.choices[0]?.message?.content) {
                 return response.choices[0].message.content;
             }
-        } catch (error) {
-            // Ignora log
-        }
-
+        } catch (error) { }
     }
 
-    // 3. TENTATIVA COM GPT-4o MINI
+    // 3. TENTATIVA COM GPT-4o MINI (Fallback apenas para TEXTO)
     if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.includes("sk-")) {
         try {
             const response = await openai.chat.completions.create({
@@ -54,13 +55,10 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
             if (response && response.choices[0]?.message?.content) {
                 return response.choices[0].message.content;
             }
-        } catch (error) {
-            // Ignora log
-        }
-
+        } catch (error) { }
     }
 
-    return "⚠️ Desculpe, estou recebendo muitas mensagens agora e minhas APIs grátis atingiram o limite. Tente novamente em 1 minuto.";
+    return "⚠️ Estou com instabilidade nas APIs. Aguarde um momento.";
 }
 
 async function processWithGemini(messageText, mediaBuffer, mimeType) {
@@ -69,13 +67,15 @@ async function processWithGemini(messageText, mediaBuffer, mimeType) {
         systemInstruction: SYSTEM_PROMPT
     });
 
-    let promptParts = [messageText || "O que tem nesta imagem/áudio?"];
+    let promptParts = [messageText || "O que tem nesta mídia?"];
 
     if (mediaBuffer && mimeType) {
+        // WhatsApp envia audio/ogg; codecs=opus. O Gemini quer apenas audio/ogg.
+        const cleanMimeType = mimeType.split(';')[0];
         promptParts.push({
             inlineData: {
                 data: mediaBuffer.toString("base64"),
-                mimeType: mimeType.split(';')[0]
+                mimeType: cleanMimeType
             }
         });
     }
