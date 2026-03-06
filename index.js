@@ -81,7 +81,7 @@ async function connectToWhatsApp() {
             const response = await processMessage(text, mediaBuffer, mimeType);
 
             // Envia a resposta Final
-            await socket.sendMessage(remoteJid, { text: response }, { quoted: msg });
+            await socket.sendMessage(remoteJid, { text: response });
         } catch (err) {
             console.log('Erro ao processar mensagem:', err.message);
         }
