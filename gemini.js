@@ -18,79 +18,101 @@ function cleanWhatsAppText(text) {
 
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
     const isMedia = mediaBuffer !== null;
+    const cleanMime = mimeType?.split(';')[0];
     let responseText = "";
 
-    // 1. TENTATIVA COM GEMINI (Principal para tudo)
+    // 1. TENTATIVA COM GEMINI (Principal para tudo pois é Grátis e Multimodal)
     try {
         responseText = await processWithGemini(messageText, mediaBuffer, mimeType);
         return cleanWhatsAppText(responseText);
     } catch (error) {
-        console.log(`❌ Gemini fora de cota.`);
+        console.log(`❌ Gemini fora de cota. Iniciando Rodízio de Fallback...`);
     }
 
-    // 2. FALLBACK PARA ÁUDIO (GROQ WHISPER - Grátis e Rápido)
-    const cleanMime = mimeType?.split(';')[0];
-    if (isMedia && cleanMime?.startsWith('audio/')) {
+    // 2. RODÍZIO INTELIGENTE (GROQ - Econômico e Eficiente)
+    if (process.env.GROQ_API_KEY) {
         try {
-            console.log(`🔄 [FALLBACK AUDIO] Usando Groq Whisper (Grátis)...`);
-            const groqTranscription = await groq.audio.transcriptions.create({
-                file: await groqToFile(mediaBuffer, `audio.ogg`),
-                model: "whisper-large-v3",
-            });
-
-            const textResult = groqTranscription.text;
-            console.log(`🎤 Groq transcreveu: "${textResult}"`);
-
-            // Agora pede para o Groq responder o texto transcrito
-            const chatRes = await groq.chat.completions.create({
-                messages: [
-                    { role: "system", content: SYSTEM_PROMPT },
-                    { role: "user", content: `O usuário enviou um áudio que diz: "${textResult}". Responda de forma adequada.` }
-                ],
-                model: "llama-3.1-8b-instant",
-            });
-            return cleanWhatsAppText(chatRes.choices[0]?.message?.content);
-        } catch (err) {
-            console.log(`❌ Groq Whisper também falhou.`);
-        }
-    }
-
-    // 3. FALLBACK PARA OPENAI (Se as anteriores falharem e você tiver créditos)
-    if (isMedia) {
-        try {
-            console.log(`🔄 [FALLBACK MIDIA] Tentando OpenAI como última opção...`);
-            const itWorked = await processWithOpenAI(messageText, mediaBuffer, mimeType);
-            if (itWorked) return cleanWhatsAppText(itWorked);
-        } catch (error) {
-            console.log(`❌ OpenAI também falhou.`);
-        }
-    } else {
-        // Se for só Texto, tenta Groq e então OpenAI
-        try {
-            const response = await groq.chat.completions.create({
-                messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: messageText }],
-                model: "llama-3.1-8b-instant",
-            });
-            return cleanWhatsAppText(response.choices[0]?.message?.content);
-        } catch (e) {
-            try {
-                const response = await openai.chat.completions.create({
-                    model: "gpt-4o-mini",
-                    messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: messageText }],
+            // FALLBACK PARA ÁUDIO (Groq Whisper + Llama 8B)
+            if (isMedia && cleanMime?.startsWith('audio/')) {
+                console.log(`🔄 [RODÍZIO] Áudio -> Groq Whisper...`);
+                const transcription = await groq.audio.transcriptions.create({
+                    file: await groqToFile(mediaBuffer, `audio.ogg`),
+                    model: "whisper-large-v3",
                 });
-                return cleanWhatsAppText(response.choices[0]?.message?.content);
-            } catch (e2) { }
+                const chatRes = await groq.chat.completions.create({
+                    messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: `O usuário enviou um áudio que diz: "${transcription.text}". Responda adequadamente.` }
+                    ],
+                    model: "llama-3.1-8b-instant", // Versão econômica para resposta de texto
+                });
+                return cleanWhatsAppText(chatRes.choices[0]?.message?.content);
+            }
+
+            // FALLBACK PARA IMAGEM (Groq Vision Llama 3.2 11B)
+            if (isMedia && cleanMime?.startsWith('image/')) {
+                console.log(`🔄 [RODÍZIO] Imagem -> Groq Vision 11B...`);
+                const visionRes = await groq.chat.completions.create({
+                    model: "llama-3.2-11b-vision-preview", // Versão específica para Visão
+                    messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        {
+                            role: "user",
+                            content: [
+                                { type: "text", text: messageText || "Descreva esta imagem" },
+                                {
+                                    type: "image_url",
+                                    image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` }
+                                }
+                            ]
+                        }
+                    ]
+                });
+                return cleanWhatsAppText(visionRes.choices[0]?.message?.content);
+            }
+
+            // FALLBACK PARA TEXTO PURO (Groq Llama 8B - O mais rápido e econômico)
+            if (!isMedia) {
+                console.log(`🔄 [RODÍZIO] Texto -> Groq Llama 8B (Econômico)...`);
+                const textRes = await groq.chat.completions.create({
+                    messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: messageText }
+                    ],
+                    model: "llama-3.1-8b-instant",
+                });
+                return cleanWhatsAppText(textRes.choices[0]?.message?.content);
+            }
+        } catch (err) {
+            console.log(`❌ Groq também falhou: ${err.message}`);
         }
     }
 
-    return "⚠️ Todas as minhas APIs atingiram o limite simultaneamente (Gemini, Groq e OpenAI). Por favor, aguarde 1 minuto e tente novamente.";
+    // 3. ÚLTIMO RECURSO (OPENAI - Caso tudo acima falhe)
+    try {
+        console.log(`🔄 [RODÍZIO] Último Recurso -> OpenAI...`);
+        const openaiResponse = await processWithOpenAI(messageText, mediaBuffer, mimeType);
+        if (openaiResponse) return cleanWhatsAppText(openaiResponse);
+    } catch (e) {
+        console.log(`❌ OpenAI também falhou.`);
+    }
+
+    return "⚠️ Desculpe, todos os meus sistemas (Gemini, Groq e OpenAI) estão temporariamente fora de cota. Tente novamente em 1 minuto.";
 }
 
 async function processWithGemini(messageText, mediaBuffer, mimeType) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: SYSTEM_PROMPT });
-    let promptParts = [messageText || "O que tem nesta mídia?"];
+    const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        systemInstruction: SYSTEM_PROMPT
+    });
+    let promptParts = [messageText || "Analise esta mídia"];
     if (mediaBuffer && mimeType) {
-        promptParts.push({ inlineData: { data: mediaBuffer.toString("base64"), mimeType: mimeType.split(';')[0] } });
+        promptParts.push({
+            inlineData: {
+                data: mediaBuffer.toString("base64"),
+                mimeType: mimeType.split(';')[0]
+            }
+        });
     }
     const result = await model.generateContent(promptParts);
     return result.response.text();
@@ -99,23 +121,24 @@ async function processWithGemini(messageText, mediaBuffer, mimeType) {
 async function processWithOpenAI(messageText, mediaBuffer, mimeType) {
     if (!process.env.OPENAI_API_KEY) return null;
     const cleanMime = mimeType?.split(';')[0];
+
     if (cleanMime?.startsWith('image/')) {
-        const response = await openai.chat.completions.create({
+        const res = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: [{ type: "text", text: messageText || "Descreva" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
         });
-        return response.choices[0]?.message?.content;
+        return res.choices[0]?.message?.content;
     }
+
     if (cleanMime?.startsWith('audio/')) {
-        const transcription = await openai.audio.transcriptions.create({
-            file: await openaiToFile(mediaBuffer, `audio.ogg`),
-            model: "whisper-1",
-        });
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: `Responda a isso: ${transcription.text}` }]
-        });
-        return response.choices[0]?.message?.content;
+        const trans = await openai.audio.transcriptions.create({ file: await openaiToFile(mediaBuffer, `audio.ogg`), model: "whisper-1" });
+        const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: `Responda: ${trans.text}` }] });
+        return res.choices[0]?.message?.content;
     }
-    return null;
+
+    const res = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: messageText }]
+    });
+    return res.choices[0]?.message?.content;
 }
