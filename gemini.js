@@ -5,20 +5,28 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const SYSTEM_PROMPT = "Você é um assistente pessoal prestativo. Responda sempre em Português do Brasil (PT-BR). Seja conciso e amigável.";
+const SYSTEM_PROMPT = "Você é um assistente pessoal prestativo. Responda sempre em Português do Brasil (PT-BR). Seja conciso e amigável. IMPORTANTE: Para negrito, use sempre APENAS UNICO asterisco de cada lado (exemplo: *negrito*). NUNCA use dois asteriscos (**), pois o WhatsApp não reconhece.";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Função para garantir que a formatação do WhatsApp esteja correta
+function cleanWhatsAppText(text) {
+    if (!text) return text;
+    // Substitui **texto** por *texto* (Markdown para WhatsApp)
+    return text.replace(/\*\*(.*?)\*\*/g, '*$1*');
+}
+
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
     const isMedia = mediaBuffer !== null;
+    let responseText = "";
 
     // 1. TENTATIVA COM GEMINI (O ÚNICO QUE PROCESSA ÁUDIO/IMAGEM)
     try {
-        return await processWithGemini(messageText, mediaBuffer, mimeType);
+        responseText = await processWithGemini(messageText, mediaBuffer, mimeType);
+        return cleanWhatsAppText(responseText);
     } catch (error) {
-        // Se for mídia (áudio/imagem), não adianta passar para Groq/GPT Mini pois eles não "ouvem" nem "veem" o arquivo.
         if (isMedia) {
             return "⚠️ Meu sistema de processamento de áudio/imagem está congestionado agora. Por favor, tente enviar um texto ou aguarde 1 minuto.";
         }
@@ -36,7 +44,8 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
             }).catch(() => null);
 
             if (response && response.choices[0]?.message?.content) {
-                return response.choices[0].message.content;
+                responseText = response.choices[0].message.content;
+                return cleanWhatsAppText(responseText);
             }
         } catch (error) { }
     }
@@ -53,7 +62,8 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
             }).catch(() => null);
 
             if (response && response.choices[0]?.message?.content) {
-                return response.choices[0].message.content;
+                responseText = response.choices[0].message.content;
+                return cleanWhatsAppText(responseText);
             }
         } catch (error) { }
     }
@@ -70,7 +80,6 @@ async function processWithGemini(messageText, mediaBuffer, mimeType) {
     let promptParts = [messageText || "O que tem nesta mídia?"];
 
     if (mediaBuffer && mimeType) {
-        // WhatsApp envia audio/ogg; codecs=opus. O Gemini quer apenas audio/ogg.
         const cleanMimeType = mimeType.split(';')[0];
         promptParts.push({
             inlineData: {
