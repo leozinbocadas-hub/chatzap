@@ -80,6 +80,9 @@ async function connectToWhatsApp() {
             // Pede a resposta para as APIs (Sistema de Rodízio)
             const response = await processMessage(text, mediaBuffer, mimeType);
 
+            // Espera 5 segundos para simular a digitação humana
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
             // Envia a resposta Final
             await socket.sendMessage(remoteJid, { text: response });
         } catch (err) {
