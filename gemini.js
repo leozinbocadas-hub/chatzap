@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -18,48 +18,69 @@ function cleanWhatsAppText(text) {
 
 export async function processMessage(messageText, mediaBuffer = null, mimeType = null) {
     const isMedia = mediaBuffer !== null;
+    let responseText = "";
 
-    // 1. TENTATIVA COM GEMINI (UNICO PARA MIDIA)
+    // 1. TENTATIVA COM GEMINI (Multimodal: Texto, Imagem, Áudio)
     try {
-        if (isMedia) {
-            console.log(`🧪 [MIDIA] Enviando para Gemini. Prompt solicitado: "${messageText}"`);
-            console.log(`📂 [ARQUIVO] Buffer size: ${mediaBuffer.length} bytes | Mime: ${mimeType}`);
-        } else {
-            console.log(`📝 [TEXTO] Enviando para Gemini: "${messageText}"`);
-        }
+        if (isMedia) console.log(`🧪 [MIDIA] Enviando para Gemini (Prioridade 1)...`);
+        else console.log(`📝 [TEXTO] Enviando para Gemini (Prioridade 1)...`);
 
-        const responseText = await processWithGemini(messageText, mediaBuffer, mimeType);
-
-        console.log(`✅ [SUCESSO] Gemini respondeu (tamanho: ${responseText.length} caracteres)`);
-        if (isMedia) console.log(`🔍 [CONTEUDO] Início da resposta: ${responseText.substring(0, 100)}...`);
-
+        responseText = await processWithGemini(messageText, mediaBuffer, mimeType);
+        console.log(`✅ Gemini processou com sucesso.`);
         return cleanWhatsAppText(responseText);
     } catch (error) {
-        console.log(`❌ [ERRO GEMINI] Detalhes: ${error.message}`);
-        if (isMedia) {
-            return "⚠️ Meu sistema de áudio/imagem está lento. Tente texto ou aguarde 1 minuto.";
-        }
+        console.log(`❌ Gemini falhou: ${error.message}`);
     }
 
-
-    // FALLBACK PARA TEXTO (GROQ)
-    if (process.env.GROQ_API_KEY) {
+    // 2. FALLBACK PARA MIDIA (OPENAI) OU TEXTO (GROQ)
+    if (isMedia) {
+        // Se o Gemini falhou e é mídia, tentamos OpenAI (Vision para imagem / Whisper para áudio)
         try {
-            console.log("🔄 Usando Fallback: Groq...");
-            const response = await groq.chat.completions.create({
-                messages: [
-                    { role: "system", content: SYSTEM_PROMPT },
-                    { role: "user", content: messageText || "Olá" }
-                ],
-                model: "llama-3.1-8b-instant",
-            });
-            return cleanWhatsAppText(response.choices[0]?.message?.content);
+            console.log(`� [FALLBACK MIDIA] Usando OpenAI (GPT-4o Mini / Whisper)...`);
+            const fallbackResponse = await processWithOpenAI(messageText, mediaBuffer, mimeType);
+            if (fallbackResponse) {
+                console.log(`✅ OpenAI processou a mídia com sucesso.`);
+                return cleanWhatsAppText(fallbackResponse);
+            }
         } catch (error) {
-            console.log("❌ Groq falhou.");
+            console.log(`❌ OpenAI falhou no fallback de mídia: ${error.message}`);
+        }
+    } else {
+        // Se o Gemini falhou e é texto, seguimos o rodízio: Groq -> OpenAI
+        if (process.env.GROQ_API_KEY) {
+            try {
+                console.log("🔄 [FALLBACK TEXTO] Usando Groq...");
+                const response = await groq.chat.completions.create({
+                    messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: messageText || "Olá" }
+                    ],
+                    model: "llama-3.1-8b-instant",
+                });
+                return cleanWhatsAppText(response.choices[0]?.message?.content);
+            } catch (error) {
+                console.log("❌ Groq falhou.");
+            }
+        }
+
+        if (process.env.OPENAI_API_KEY) {
+            try {
+                console.log("🔄 [FALLBACK TEXTO] Usando OpenAI...");
+                const response = await openai.chat.completions.create({
+                    model: "gpt-4o-mini",
+                    messages: [
+                        { role: "system", content: SYSTEM_PROMPT },
+                        { role: "user", content: messageText || "Olá" }
+                    ],
+                });
+                return cleanWhatsAppText(response.choices[0]?.message?.content);
+            } catch (error) {
+                console.log("❌ OpenAI falhou no fallback de texto.");
+            }
         }
     }
 
-    return "⚠️ Estou com instabilidade. Tente novamente logo.";
+    return "⚠️ Estou com instabilidade nas minhas APIs de IA. Por favor, aguarde um momento e tente novamente.";
 }
 
 async function processWithGemini(messageText, mediaBuffer, mimeType) {
@@ -68,20 +89,68 @@ async function processWithGemini(messageText, mediaBuffer, mimeType) {
         systemInstruction: SYSTEM_PROMPT
     });
 
-    let promptParts = [messageText || "Analise esta mídia"];
-
+    let promptParts = [messageText || "O que tem nesta mídia?"];
     if (mediaBuffer && mimeType) {
-        const cleanMimeType = mimeType.split(';')[0];
-        console.log(`📂 Arquivo: ${cleanMimeType} (${mediaBuffer.length} bytes)`);
-
         promptParts.push({
             inlineData: {
                 data: mediaBuffer.toString("base64"),
-                mimeType: cleanMimeType
+                mimeType: mimeType.split(';')[0]
             }
         });
     }
 
     const result = await model.generateContent(promptParts);
     return result.response.text();
+}
+
+async function processWithOpenAI(messageText, mediaBuffer, mimeType) {
+    if (!process.env.OPENAI_API_KEY) return null;
+
+    const cleanMime = mimeType?.split(';')[0];
+
+    // TRATAMENTO DE IMAGEM (GPT-4o Mini Vision)
+    if (cleanMime?.startsWith('image/')) {
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: SYSTEM_PROMPT },
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: messageText || "Descreva esta imagem" },
+                        {
+                            type: "image_url",
+                            image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` }
+                        }
+                    ]
+                }
+            ]
+        });
+        return response.choices[0]?.message?.content;
+    }
+
+    // TRATAMENTO DE ÁUDIO (Whisper + GPT)
+    if (cleanMime?.startsWith('audio/')) {
+        // 1. Transcreve com Whisper
+        // Criamos um arquivo virtual para o Whisper aceitar
+        const transcription = await openai.audio.transcriptions.create({
+            file: await toFile(mediaBuffer, `audio.${cleanMime.split('/')[1] || 'ogg'}`, { type: cleanMime }),
+            model: "whisper-1",
+        });
+
+        const transcribedText = transcription.text;
+        console.log(`🎤 Transcrição OpenAI: "${transcribedText}"`);
+
+        // 2. Envia o texto para o GPT processar
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: SYSTEM_PROMPT },
+                { role: "user", content: `O usuário enviou um áudio que diz: "${transcribedText}". Responda de forma adequada.` }
+            ]
+        });
+        return response.choices[0]?.message?.content;
+    }
+
+    return null;
 }
