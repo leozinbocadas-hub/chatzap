@@ -22,7 +22,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
     const isMedia = mediaBuffer !== null;
     const cleanMime = mimeType?.split(';')[0];
 
-    // 1. RODÍZIO GEMINI
+    // 1. RODÍZIO GEMINI (Principal)
     for (let i = 0; i < geminiKeys.length; i++) {
         try {
             const genAI = new GoogleGenerativeAI(geminiKeys[i]);
@@ -33,42 +33,62 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         }
     }
 
-    // 2. RODÍZIO GROQ
+    // 2. RODÍZIO GROQ (Fallback 2026)
     for (let i = 0; i < groqKeys.length; i++) {
         try {
             const groq = new Groq({ apiKey: groqKeys[i] });
 
+            // Fallback ÁUDIO (Whisper + Llama 3.3)
             if (isMedia && cleanMime?.startsWith('audio/')) {
+                console.log(`🔄 [GROQ] Áudio -> Whisper (Chave ${i + 1})...`);
                 const transcription = await groq.audio.transcriptions.create({
                     file: await groqToFile(mediaBuffer, `audio.ogg`),
                     model: "whisper-large-v3",
                 });
                 const chatRes = await groq.chat.completions.create({
                     messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: `Responda: ${transcription.text}` }],
-                    model: "llama-3.1-8b-instant",
+                    model: "llama-3.3-70b-versatile", // Modelo Versatile 2026
                 });
                 return cleanWhatsAppText(chatRes.choices[0]?.message?.content);
             }
 
+            // Fallback IMAGEM (Llama 4 Scout / Pixtral)
             if (isMedia && cleanMime?.startsWith('image/')) {
-                console.log(`📸 [GROQ] Processando imagem com Chave ${i + 1}...`);
-                const visionRes = await groq.chat.completions.create({
-                    model: "llama-3.2-11b-vision-preview",
-                    messages: [{
-                        role: "user",
-                        content: [
-                            { type: "text", text: messageText || "Descreva esta imagem" },
-                            { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }
-                        ]
-                    }]
-                });
-                return cleanWhatsAppText(visionRes.choices[0]?.message?.content);
+                console.log(`📸 [GROQ] Imagem -> Llama 4 Scout (Chave ${i + 1})...`);
+                try {
+                    const visionRes = await groq.chat.completions.create({
+                        model: "meta-llama/llama-4-scout-17b-16e-instruct", // Modelo Vision 2026
+                        messages: [{
+                            role: "user",
+                            content: [
+                                { type: "text", text: messageText || "Descreva esta imagem" },
+                                { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }
+                            ]
+                        }]
+                    });
+                    return cleanWhatsAppText(visionRes.choices[0]?.message?.content);
+                } catch (vErr) {
+                    console.log(`⚠️ Llama 4 falhou, tentando Pixtral...`);
+                    const pixRes = await groq.chat.completions.create({
+                        model: "pixtral-12b-2409",
+                        messages: [{
+                            role: "user",
+                            content: [
+                                { type: "text", text: messageText || "Descreva" },
+                                { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }
+                            ]
+                        }]
+                    });
+                    return cleanWhatsAppText(pixRes.choices[0]?.message?.content);
+                }
             }
 
+            // Fallback TEXTO (Llama 3.3 Versatile)
             if (!isMedia) {
+                console.log(`🔄 [GROQ] Texto -> Llama 3.3 (Chave ${i + 1})...`);
                 const textRes = await groq.chat.completions.create({
                     messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: messageText }],
-                    model: "llama-3.1-8b-instant",
+                    model: "llama-3.3-70b-versatile",
                 });
                 return cleanWhatsAppText(textRes.choices[0]?.message?.content);
             }
@@ -77,7 +97,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         }
     }
 
-    // 3. RODÍZIO OPENAI
+    // 3. RODÍZIO OPENAI (Último recurso)
     for (let i = 0; i < openaiKeys.length; i++) {
         try {
             console.log(`🔄 [OPENAI] Tentando Chave ${i + 1}...`);
@@ -89,7 +109,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         }
     }
 
-    return "⚠️ Infelizmente não consegui processar sua imagem agora. Tente mandar um texto ou aguarde 1 minuto para o reset das cotas gratuitas.";
+    return "⚠️ Infelizmente não consegui processar agora. Tente mandar um texto ou aguarde 1 minuto.";
 }
 
 async function processWithGemini(genAI, messageText, mediaBuffer, mimeType) {
