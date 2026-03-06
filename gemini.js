@@ -203,7 +203,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
 }
 
 async function processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId) {
-    const modelsToTry = ["gemini-2.0-flash", "gemini-1.5-pro"];
+    const modelsToTry = ["gemini-2.0-flash"];
 
     for (const modelName of modelsToTry) {
         try {
