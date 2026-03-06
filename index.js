@@ -23,8 +23,8 @@ async function connectToWhatsApp() {
         printQRInTerminal: false,
         browser: ['Ubuntu', 'Chrome', '20.0.04'],
         logger: pino({ level: 'silent' }),
-        syncFullHistory: false,
-        markOnlineOnConnect: false,
+        syncFullHistory: false,      // Mata o erro 515 (não sincroniza passado)
+        markOnlineOnConnect: true,   // Mantém o bot Online sempre que conectar
         connectTimeoutMs: 20000,
         defaultQueryTimeoutMs: 0,
         retryRequestDelayMs: 5000,
