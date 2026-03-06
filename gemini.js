@@ -90,19 +90,6 @@ function cleanWhatsAppText(text) {
     return text.replace(/\*\*(.*?)\*\*/g, '*$1*');
 }
 
-function sanitizeResponse(text) {
-    if (!text) return text;
-    const blocked = [
-        /gemini/gi, /groq/gi, /openai/gi, /open ai/gi, /chatgpt/gi,
-        /api\s?(key|chave)?/gi, /cota/gi, /quota/gi, /rate.?limit/gi,
-        /modelo\s?(de)?\s?ia/gi, /instabilidade/gi,
-        /gpt[-\s]?4?/gi, /llama/gi, /whisper/gi, /pixtral/gi,
-    ];
-    let cleaned = text;
-    blocked.forEach(pattern => { cleaned = cleaned.replace(pattern, '_IA_'); });
-    if ((cleaned.match(/_IA_/g) || []).length > 2) return "😊 Posso te ajudar com mais alguma coisa?";
-    return cleaned.replace(/_IA_/g, '');
-}
 
 // Monta o array de mensagens com histórico para APIs compatíveis (Groq/OpenAI)
 function buildMessages(userId, newUserMessage) {
@@ -124,7 +111,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
         try {
             const genAI = new GoogleGenerativeAI(geminiKeys[i]);
             responseText = await processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId);
-            const clean = sanitizeResponse(cleanWhatsAppText(responseText));
+            const clean = cleanWhatsAppText();
             addToHistory(userId, messageText || "[mídia]", clean);
             return clean;
         } catch (error) {
@@ -145,7 +132,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                 });
                 const msgs = buildMessages(userId, `O usuário enviou um áudio que diz: "${transcription.text}". Responda adequadamente.`);
                 const chatRes = await groq.chat.completions.create({ messages: msgs, model: "llama-3.3-70b-versatile" });
-                const clean = sanitizeResponse(cleanWhatsAppText(chatRes.choices[0]?.message?.content));
+                const clean = cleanWhatsAppText();
                 addToHistory(userId, `[áudio: ${transcription.text}]`, clean);
                 return clean;
             }
@@ -157,7 +144,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                         model: "meta-llama/llama-4-scout-17b-16e-instruct",
                         messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva esta imagem" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
                     });
-                    const clean = sanitizeResponse(cleanWhatsAppText(visionRes.choices[0]?.message?.content));
+                    const clean = cleanWhatsAppText();
                     addToHistory(userId, `[imagem com legenda: ${messageText || "sem legenda"}]`, clean);
                     return clean;
                 } catch (vErr) {
@@ -166,7 +153,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                         model: "pixtral-12b-2409",
                         messages: [{ role: "user", content: [{ type: "text", text: messageText || "Descreva" }, { type: "image_url", image_url: { url: `data:${cleanMime};base64,${mediaBuffer.toString("base64")}` } }] }]
                     });
-                    const clean = sanitizeResponse(cleanWhatsAppText(pixRes.choices[0]?.message?.content));
+                    const clean = cleanWhatsAppText();
                     addToHistory(userId, `[imagem]`, clean);
                     return clean;
                 }
@@ -176,7 +163,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
                 console.log(`🔄 [GROQ] Texto -> Llama 3.3 (Chave ${i + 1})...`);
                 const msgs = buildMessages(userId, messageText);
                 const textRes = await groq.chat.completions.create({ messages: msgs, model: "llama-3.3-70b-versatile" });
-                const clean = sanitizeResponse(cleanWhatsAppText(textRes.choices[0]?.message?.content));
+                const clean = cleanWhatsAppText();
                 addToHistory(userId, messageText, clean);
                 return clean;
             }
@@ -192,7 +179,7 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
             const openai = new OpenAI({ apiKey: openaiKeys[i] });
             const res = await processWithOpenAI(openai, messageText, mediaBuffer, mimeType, userId);
             if (res) {
-                const clean = sanitizeResponse(cleanWhatsAppText(res));
+                const clean = cleanWhatsAppText();
                 addToHistory(userId, messageText || "[mídia]", clean);
                 return clean;
             }
@@ -205,24 +192,35 @@ export async function processMessage(messageText, mediaBuffer = null, mimeType =
 }
 
 async function processWithGemini(genAI, messageText, mediaBuffer, mimeType, userId) {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: SYSTEM_PROMPT });
+    // Tenta gemini-1.5-flash primeiro (1500 req/dia grátis), depois o 8b como fallback
+    const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b"];
 
-    // Monta o histórico no formato do Gemini
-    const rawHistory = loadHistory(userId);
-    const geminiHistory = rawHistory.map(m => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }]
-    }));
+    for (const modelName of modelsToTry) {
+        try {
+            const model = genAI.getGenerativeModel({ model: modelName, systemInstruction: SYSTEM_PROMPT });
 
-    const chat = model.startChat({ history: geminiHistory });
+            // Monta o histórico no formato do Gemini
+            const rawHistory = loadHistory(userId);
+            const geminiHistory = rawHistory.map(m => ({
+                role: m.role === "assistant" ? "model" : "user",
+                parts: [{ text: m.content }]
+            }));
 
-    let promptParts = [{ text: messageText || "Analise esta mídia" }];
-    if (mediaBuffer && mimeType) {
-        promptParts.push({ inlineData: { data: mediaBuffer.toString("base64"), mimeType: mimeType.split(';')[0] } });
+            const chat = model.startChat({ history: geminiHistory });
+
+            let promptParts = [{ text: messageText || "Analise esta mídia" }];
+            if (mediaBuffer && mimeType) {
+                promptParts.push({ inlineData: { data: mediaBuffer.toString("base64"), mimeType: mimeType.split(';')[0] } });
+            }
+
+            const result = await chat.sendMessage(promptParts);
+            console.log(`✅ Gemini respondeu usando: ${modelName}`);
+            return result.response.text();
+        } catch (err) {
+            console.log(`⚠️ Gemini modelo ${modelName} falhou: ${err.status || err.message}`);
+        }
     }
-
-    const result = await chat.sendMessage(promptParts);
-    return result.response.text();
+    throw new Error("Todos os modelos Gemini falharam");
 }
 
 async function processWithOpenAI(openai, messageText, mediaBuffer, mimeType, userId) {
