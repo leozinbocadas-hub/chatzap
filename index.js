@@ -101,8 +101,17 @@ async function connectToWhatsApp() {
                 console.log(`🤖 Processando mensagens para ${remoteJid}...`);
                 const response = await processMessage(finalData.text.trim(), finalData.media, finalData.mime);
 
-                console.log(`📤 Enviando resposta final para ${remoteJid}...`);
-                await socket.sendMessage(remoteJid, { text: response });
+                // DIVIDIR RESPOSTA EM PARTES SE HOUVER [BREAK]
+                const parts = response.split('[BREAK]').map(p => p.trim()).filter(p => p.length > 0);
+
+                for (let i = 0; i < parts.length; i++) {
+                    await socket.sendPresenceUpdate('composing', remoteJid);
+                    // Delay proporcional ao tamanho do texto (mín 1s, máx 4s)
+                    const delay = Math.min(4000, Math.max(1000, parts[i].length * 20));
+                    await new Promise(res => setTimeout(res, delay));
+                    await socket.sendMessage(remoteJid, { text: parts[i] });
+                    console.log(`📤 Parte ${i + 1}/${parts.length} enviada.`);
+                }
             } catch (err) {
                 console.log('Erro na fila:', err.message);
             }
