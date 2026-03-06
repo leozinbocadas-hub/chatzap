@@ -36,9 +36,9 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log('----\nEscaneie o QR Code abaixo:\n----');
             qrcode.generate(qr, { small: true });
         }
+
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -47,8 +47,9 @@ async function connectToWhatsApp() {
             }
 
         } else if (connection === 'open') {
-            console.log('✅ BOT CONECTADO COM SUCESSO!');
+            console.log('✅ CONECTADO');
         }
+
     });
 
     socket.ev.on('messages.upsert', async (m) => {
